@@ -22,7 +22,7 @@ Houdini (hou), and Python automation. Help the user debug 3D pipeline scripts.
 If an image is provided, it's a console error screenshot—find the fix.
 """
 
-# 2. RETRY LOGIC (Handles 429 errors automatically)
+# 2. RETRY LOGIC (Handles 429 "Resource Exhausted" errors)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -30,7 +30,7 @@ If an image is provided, it's a console error screenshot—find the fix.
 )
 def get_ai_response(content_list):
     return client.models.generate_content(
-        model="gemini-1.5-flash", # Fixed: Correct string for 1.5 Flash
+        model="gemini-1.5-flash", # <--- FIX: This exact string avoids the 404
         contents=content_list,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -44,7 +44,7 @@ async def on_ready():
 
 @bot.command()
 async def status(ctx):
-    await ctx.send("Systems operational. AI Debugging active!")
+    await ctx.send("Systems operational. AI Debugger is active!")
 
 @bot.command()
 async def reset(ctx):
