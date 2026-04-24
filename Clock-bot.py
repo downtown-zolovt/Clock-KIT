@@ -30,7 +30,7 @@ If an image is provided, it's a console error screenshot—find the fix.
 )
 def get_ai_response(content_list):
     return client.models.generate_content(
-        model="gemini-1.5-flash", 
+        model="flash-1.5", 
         contents=content_list,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
