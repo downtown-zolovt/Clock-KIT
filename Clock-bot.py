@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
+from google.api_core import exceptions  # Added for 429 error catching
 
 # 1. SETUP
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -16,21 +17,30 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. THE GENERATION LOGIC
+# 2. UPDATED GENERATION LOGIC WITH FALLBACK
 def get_ai_response(prompt, img_bytes=None):
-    # Using the 2.0 model confirmed in your logs
-    model_id = "gemini-2.0-flash" 
+    # Try these in order if the first one is exhausted
+    models_to_try = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
     
     contents = [prompt]
     if img_bytes:
         contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
 
-    # This is a synchronous call to the SDK
-    response = client.models.generate_content(
-        model=model_id,
-        contents=contents
-    )
-    return response.text
+    for model_id in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_id,
+                contents=contents
+            )
+            return response.text
+        except exceptions.ResourceExhausted:
+            # This catches the 429 quota error and tries the next model
+            print(f"⚠️ {model_id} exhausted. Trying next model...")
+            continue 
+        except Exception as e:
+            return f"❌ Unexpected Error: {str(e)}"
+            
+    return "❌ All available models are currently at their rate limit. Please try again in a minute."
 
 @bot.event
 async def on_ready():
@@ -62,11 +72,8 @@ async def on_message(message):
                         break 
 
             try:
-                # --- THE FIX ---
-                # We use asyncio.to_thread to run the blocking get_ai_response function
-                # without freezing the whole bot. We MUST 'await' the result.
+                # Await the thread to prevent the <coroutine> error
                 reply = await asyncio.to_thread(get_ai_response, clean_text, img_data)
-                
                 await message.reply(reply)
             except Exception as e:
                 await message.reply(f"❌ API Error: {str(e)}")
