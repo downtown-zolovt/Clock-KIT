@@ -1,5 +1,6 @@
 discord.py
 flask
 google-genai
+google-api-core
 python-dotenv
 tenacity
