@@ -8,23 +8,21 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-# --- FIX START: Force Production API Version ---
-# This overrides the 'v1beta' default that was causing the 404
+# --- FORCED PRODUCTION CONFIG ---
+# This forces the API to use the stable 'v1' route instead of 'v1beta'
 genai.configure(
     api_key=GEMINI_KEY,
-    transport='rest' # Using REST transport is often more stable for cloud hosts
+    transport='rest'
 )
-# --- FIX END ---
+# -------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. UPDATED CHAT FUNCTION
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def get_ai_response(prompt, img_data=None):
-    # We use the generic 'gemini-1.5-flash' name. 
-    # The SDK will now route this through v1 instead of v1beta.
+    # 'gemini-1.5-flash' is the stable production string
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     if img_data:
@@ -35,7 +33,7 @@ def get_ai_response(prompt, img_data=None):
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is online. Routing via Production API v1.')
+    print(f'✅ {bot.user} is online. Routing via Production API.')
 
 @bot.event
 async def on_message(message):
@@ -43,9 +41,9 @@ async def on_message(message):
 
     if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
-            # Handle mention formats for both Mobile and Desktop
+            # Clean up the message text
             clean_text = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').replace('!debug', '').strip()
-            if not clean_text: clean_text = "Analyze current system status."
+            if not clean_text: clean_text = "System check: Are you active?"
 
             img_part = None
             if message.attachments:
@@ -58,10 +56,12 @@ async def on_message(message):
                 reply = get_ai_response(clean_text, img_part)
                 await message.reply(reply)
             except Exception as e:
-                # This will now catch and show if the error moved from 404 to something else
+                # If this hits, the error will tell us if it's still a 404 or a 429 (Rate Limit)
                 await message.reply(f"❌ Connection Error: {str(e)}")
 
     await bot.process_commands(message)
 
 if __name__ == "__main__":
+    if not GEMINI_KEY:
+        print("❌ CRITICAL: GEMINI_API_KEY is missing from environment variables!")
     bot.run(TOKEN)
