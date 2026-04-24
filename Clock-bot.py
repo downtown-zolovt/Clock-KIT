@@ -10,24 +10,22 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
 # Initialize the NEW Google GenAI Client
-# This replaces the old genai.configure()
 client = genai.Client(api_key=GEMINI_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. THE NEW GENERATION LOGIC
-async def get_ai_response(prompt, img_bytes=None):
+# 2. THE GENERATION LOGIC
+def get_ai_response(prompt, img_bytes=None):
     # Using the 2.0 model confirmed in your logs
     model_id = "gemini-2.0-flash" 
     
     contents = [prompt]
     if img_bytes:
-        # The new SDK uses a specific 'Part' structure for images
         contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
 
-    # The new client has built-in retry logic, so we use a simple call
+    # This is a synchronous call to the SDK
     response = client.models.generate_content(
         model=model_id,
         contents=contents
@@ -48,7 +46,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Handle mentions or !debug (via the command above or manual check)
+    # Handle mentions or !debug
     if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
             # Clean up message text
@@ -61,11 +59,14 @@ async def on_message(message):
                 for attachment in message.attachments:
                     if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg']):
                         img_data = await attachment.read()
-                        break # Process only the first image
+                        break 
 
             try:
-                # Run the AI call in a thread to avoid blocking the bot's heartbeat
+                # --- THE FIX ---
+                # We use asyncio.to_thread to run the blocking get_ai_response function
+                # without freezing the whole bot. We MUST 'await' the result.
                 reply = await asyncio.to_thread(get_ai_response, clean_text, img_data)
+                
                 await message.reply(reply)
             except Exception as e:
                 await message.reply(f"❌ API Error: {str(e)}")
