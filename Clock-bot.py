@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # 1. AUTHENTICATION
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -15,38 +16,50 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
 SYSTEM_PROMPT = """
 You are the AI brain of 'Clock-kit'. Your expertise is in Blender (bpy), 
 Houdini (hou), and Python automation. Help the user debug 3D pipeline scripts. 
 If an image is provided, it's a console error screenshot—find the fix.
 """
 
+# 2. RETRY LOGIC
+# This automatically retries the request if Google says "Resource Exhausted"
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    reraise=True
+)
+def get_ai_response(content_list):
+    return client.models.generate_content(
+        model="gemini-1.5-flash", # Switched to 1.5 for higher free-tier limits
+        contents=content_list,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            tools=[types.Tool(code_execution=types.ToolCodeExecution())]
+        )
+    )
+
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is now an AI Assistant on Railway!')
+    print(f'✅ {bot.user} is active on Gemini 1.5 Flash (Railway)')
 
 @bot.command()
 async def status(ctx):
-    await ctx.send("Systems operational. AI Debugger is active!")
+    await ctx.send("Systems operational. Using Gemini 1.5 Flash for better stability!")
 
-# 2. AI LOGIC (Handles mentions and images)
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Trigger if the bot is mentioned OR starts with !debug
     if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
-            # Extract the text prompt
             prompt = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
             if not prompt:
                 prompt = "Analyze this content for errors."
 
             contents = [prompt]
 
-            # Process Attachments (Screenshots of errors)
             if message.attachments:
                 for attachment in message.attachments:
                     if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
@@ -57,23 +70,14 @@ async def on_message(message):
                         ))
 
             try:
-                # Call Gemini 2.0 Flash
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        tools=[types.Tool(code_execution=types.ToolCodeExecution())]
-                    )
-                )
-                
-                # Reply to the user
+                # Use the new retry-wrapped function
+                response = get_ai_response(contents)
                 await message.reply(response.text)
 
             except Exception as e:
+                # If after 3 retries it still fails, show the error
                 await message.reply(f"❌ AI Error: {str(e)}")
 
-    # Crucial for allowing @bot.command() to still work
     await bot.process_commands(message)
 
 if __name__ == "__main__":
