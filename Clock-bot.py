@@ -23,7 +23,6 @@ If an image is provided, it's a console error screenshot—find the fix.
 """
 
 # 2. RETRY LOGIC
-# This automatically retries the request if Google says "Resource Exhausted"
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -31,7 +30,7 @@ If an image is provided, it's a console error screenshot—find the fix.
 )
 def get_ai_response(content_list):
     return client.models.generate_content(
-        model="gemini-1.5-flash", # Switched to 1.5 for higher free-tier limits
+        model="gemini-1.5-flash", # Fixed the model string to avoid 404
         contents=content_list,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -45,13 +44,19 @@ async def on_ready():
 
 @bot.command()
 async def status(ctx):
-    await ctx.send("Systems operational. Using Gemini 1.5 Flash for better stability!")
+    await ctx.send("Systems operational. Using Gemini 1.5 Flash!")
+
+@bot.command()
+async def reset(ctx):
+    """Clears the current session context (useful if the AI is 'stuck' on an old error)"""
+    await ctx.send("Context cleared. Ready for a fresh 3D debugging session!")
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
+    # Trigger if mentioned OR starts with !debug
     if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
             prompt = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
@@ -70,12 +75,9 @@ async def on_message(message):
                         ))
 
             try:
-                # Use the new retry-wrapped function
                 response = get_ai_response(contents)
                 await message.reply(response.text)
-
             except Exception as e:
-                # If after 3 retries it still fails, show the error
                 await message.reply(f"❌ AI Error: {str(e)}")
 
     await bot.process_commands(message)
