@@ -3,9 +3,9 @@ import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# 1. AUTHENTICATION
+# 1. SETUP
+# These must be set in your Railway 'Variables' tab
 TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
@@ -16,73 +16,45 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-SYSTEM_PROMPT = """
-You are the AI brain of 'Clock-kit'. Your expertise is in Blender (bpy), 
-Houdini (hou), and Python automation. Help the user debug 3D pipeline scripts. 
-If an image is provided, it's a console error screenshot—find the fix.
-"""
-
-# 2. RETRY LOGIC (Handles 429 "Resource Exhausted" errors)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    reraise=True
-)
-def get_ai_response(content_list):
-    return client.models.generate_content(
-        model="gemini-1.5-flash", # <--- FIX: This exact string avoids the 404
-        contents=content_list,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[types.Tool(code_execution=types.ToolCodeExecution())]
-        )
-    )
-
+# 2. THE CHAT LOGIC
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is active on Gemini 1.5 Flash (Railway)')
-
-@bot.command()
-async def status(ctx):
-    await ctx.send("Systems operational. AI Debugger is active!")
-
-@bot.command()
-async def reset(ctx):
-    await ctx.send("Context cleared. Ready for a fresh 3D debugging session!")
+    print(f'✅ {bot.user} is online and connected to Gemini!')
 
 @bot.event
 async def on_message(message):
+    # Ignore the bot's own messages
     if message.author.bot:
         return
 
-    # Trigger if mentioned OR starts with !debug
-    if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
+    # Trigger: When someone mentions the bot
+    if bot.user.mentioned_in(message):
         async with message.channel.typing():
-            prompt = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
-            if not prompt:
-                prompt = "Analyze this content for errors."
-
-            contents = [prompt]
-
-            if message.attachments:
-                for attachment in message.attachments:
-                    if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
-                        img_bytes = await attachment.read()
-                        contents.append(types.Part.from_bytes(
-                            data=img_bytes,
-                            mime_type=attachment.content_type
-                        ))
+            # Clean up the message (remove the @mention)
+            user_text = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
+            
+            if not user_text:
+                user_text = "Hello!"
 
             try:
-                response = get_ai_response(contents)
+                # We use the most stable model string for the v1 API
+                response = client.models.generate_content(
+                    model="gemini-1.5-flash", 
+                    contents=user_text
+                )
                 await message.reply(response.text)
             except Exception as e:
-                await message.reply(f"❌ AI Error: {str(e)}")
+                await message.reply(f"❌ Connection Error: {str(e)}")
 
+    # Allow other !commands to work
     await bot.process_commands(message)
 
+@bot.command()
+async def status(ctx):
+    await ctx.send("Bot is alive! Mention me to chat.")
+
 if __name__ == "__main__":
-    if TOKEN:
+    if TOKEN and GEMINI_KEY:
         bot.run(TOKEN)
     else:
-        print("❌ ERROR: DISCORD_TOKEN variable is missing in Railway!")
+        print("❌ ERROR: Missing DISCORD_TOKEN or GEMINI_API_KEY in Railway Variables!")
