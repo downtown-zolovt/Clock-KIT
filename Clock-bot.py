@@ -22,7 +22,7 @@ Houdini (hou), and Python automation. Help the user debug 3D pipeline scripts.
 If an image is provided, it's a console error screenshot—find the fix.
 """
 
-# 2. RETRY LOGIC
+# 2. RETRY LOGIC (Handles 429 errors automatically)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -30,7 +30,7 @@ If an image is provided, it's a console error screenshot—find the fix.
 )
 def get_ai_response(content_list):
     return client.models.generate_content(
-        model="flash-1.5", 
+        model="gemini-1.5-flash", # Fixed: Correct string for 1.5 Flash
         contents=content_list,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -44,11 +44,10 @@ async def on_ready():
 
 @bot.command()
 async def status(ctx):
-    await ctx.send("Systems operational. Using Gemini 1.5 Flash!")
+    await ctx.send("Systems operational. AI Debugging active!")
 
 @bot.command()
 async def reset(ctx):
-    """Clears the current session context (useful if the AI is 'stuck' on an old error)"""
     await ctx.send("Context cleared. Ready for a fresh 3D debugging session!")
 
 @bot.event
