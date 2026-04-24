@@ -1,5 +1,5 @@
 discord.py
 flask
-google-genai>=0.3.0
+google-generativeai
 python-dotenv
 tenacity
