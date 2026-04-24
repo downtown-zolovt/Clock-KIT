@@ -3,58 +3,80 @@ import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-# 1. SETUP
-# These must be set in your Railway 'Variables' tab
+# 1. AUTHENTICATION
 TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-# Initialize the AI Client
 client = genai.Client(api_key=GEMINI_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. THE CHAT LOGIC
+SYSTEM_PROMPT = "You are the AI brain of 'Clock-kit', a 3D pipeline expert for Blender and Houdini."
+
+# 2. THE ROBUST FALLBACK LOGIC
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=6),
+    reraise=True
+)
+def get_ai_response(content_list):
+    # We try these three variants because different SDK versions prefer different strings
+    model_variants = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "flash-1.5"]
+    
+    last_error = None
+    for model_name in model_variants:
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=content_list,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=[types.Tool(code_execution=types.ToolCodeExecution())]
+                )
+            )
+        except Exception as e:
+            last_error = e
+            # Only continue to the next model if the error is a 404 (Not Found)
+            if "404" in str(e):
+                print(f"⚠️ Model variant {model_name} failed with 404, trying next...")
+                continue
+            # If it's a 429 (Quota) or 401 (Auth), stop and raise it
+            raise e
+            
+    raise last_error
+
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is online and connected to Gemini!')
+    print(f'✅ {bot.user} is online. Running fallback-ready model check.')
 
 @bot.event
 async def on_message(message):
-    # Ignore the bot's own messages
     if message.author.bot:
         return
 
-    # Trigger: When someone mentions the bot
-    if bot.user.mentioned_in(message):
+    if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
-            # Clean up the message (remove the @mention)
-            user_text = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
-            
-            if not user_text:
-                user_text = "Hello!"
+            prompt = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
+            contents = [prompt if prompt else "Analyze this."]
+
+            # Handle Attachments
+            if message.attachments:
+                for attachment in message.attachments:
+                    if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg']):
+                        img_bytes = await attachment.read()
+                        contents.append(types.Part.from_bytes(data=img_bytes, mime_type=attachment.content_type))
 
             try:
-                # We use the most stable model string for the v1 API
-                response = client.models.generate_content(
-                    model="gemini-1.5-flash", 
-                    contents=user_text
-                )
+                response = get_ai_response(contents)
                 await message.reply(response.text)
             except Exception as e:
-                await message.reply(f"❌ Connection Error: {str(e)}")
+                await message.reply(f"❌ AI Connection Error: {str(e)}")
 
-    # Allow other !commands to work
     await bot.process_commands(message)
 
-@bot.command()
-async def status(ctx):
-    await ctx.send("Bot is alive! Mention me to chat.")
-
 if __name__ == "__main__":
-    if TOKEN and GEMINI_KEY:
-        bot.run(TOKEN)
-    else:
-        print("❌ ERROR: Missing DISCORD_TOKEN or GEMINI_API_KEY in Railway Variables!")
+    bot.run(TOKEN)
