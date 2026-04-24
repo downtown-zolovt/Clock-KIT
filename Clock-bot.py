@@ -1,97 +1,60 @@
 import os
 import discord
 from discord.ext import commands
-from google import genai
-from google.genai import types
+import google.generativeai as genai # Switched to the more stable library
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-# 1. AUTHENTICATION
+# 1. SETUP
 TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-# Initialize the AI Client
-client = genai.Client(api_key=GEMINI_KEY)
+# Configure the SDK
+genai.configure(api_key=GEMINI_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-SYSTEM_PROMPT = """
-You are the AI brain of 'Clock-kit'. Your expertise is in Blender (bpy), 
-Houdini (hou), and Python automation. Help the user debug 3D pipeline scripts. 
-If an image is provided, it's a console error screenshot—find the fix.
-"""
-
-# 2. UPDATED RESPONSE LOGIC
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    reraise=True
-)
-def get_ai_response(content_list):
-    # Try the most canonical string first
-    try:
-        return client.models.generate_content(
-            model="gemini-1.5-flash", 
-            contents=content_list,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=[types.Tool(code_execution=types.ToolCodeExecution())]
-            )
-        )
-    except Exception as e:
-        # If the canonical name fails with a 404, try the versioned backup
-        if "404" in str(e):
-            return client.models.generate_content(
-                model="gemini-1.5-flash-001",
-                contents=content_list,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    tools=[types.Tool(code_execution=types.ToolCodeExecution())]
-                )
-            )
-        raise e
+# 2. THE STABLE CHAT FUNCTION
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def get_ai_response(prompt, img_data=None):
+    # Using the 'models/' prefix explicitly often fixes the 404 on Free Tier
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    if img_data:
+        response = model.generate_content([prompt, img_data])
+    else:
+        response = model.generate_content(prompt)
+    return response.text
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is active on Gemini 1.5 Flash (Railway)')
-
-@bot.command()
-async def status(ctx):
-    await ctx.send("Systems operational. AI Debugger is active!")
+    print(f'✅ {bot.user} is online and using the Stable SDK.')
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    if message.author.bot: return
 
     if bot.user.mentioned_in(message) or message.content.startswith('!debug'):
         async with message.channel.typing():
-            prompt = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
-            if not prompt:
-                prompt = "Analyze this content for errors."
+            clean_text = message.content.replace(f'<@!{bot.user.id}>', '').replace('!debug', '').strip()
+            if not clean_text: clean_text = "Checking systems..."
 
-            contents = [prompt]
-
+            img_part = None
             if message.attachments:
                 for attachment in message.attachments:
-                    if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
-                        img_bytes = await attachment.read()
-                        contents.append(types.Part.from_bytes(
-                            data=img_bytes,
-                            mime_type=attachment.content_type
-                        ))
+                    if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg']):
+                        raw_data = await attachment.read()
+                        img_part = {'mime_type': 'image/jpeg', 'data': raw_data}
 
             try:
-                response = get_ai_response(contents)
-                await message.reply(response.text)
+                reply = get_ai_response(clean_text, img_part)
+                await message.reply(reply)
             except Exception as e:
-                await message.reply(f"❌ AI Error: {str(e)}")
+                # If it STILL 404s, we will know exactly why now
+                await message.reply(f"❌ SDK Error: {str(e)}")
 
     await bot.process_commands(message)
 
 if __name__ == "__main__":
-    if TOKEN:
-        bot.run(TOKEN)
-    else:
-        print("❌ ERROR: DISCORD_TOKEN variable is missing!")
+    bot.run(TOKEN)
